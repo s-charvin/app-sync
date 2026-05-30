@@ -40,7 +40,7 @@ func jwtAuthMiddleware(secret []byte) gin.HandlerFunc {
 			return
 		}
 
-		userID, _ := claims["user_id"].(string)
+		userID, _ := claims["sub"].(string)
 		if userID == "" {
 			c.AbortWithStatusJSON(401, gin.H{"error": "token missing user_id claim"})
 			return
