@@ -4,12 +4,13 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
 type Config struct {
 	DatabaseURL       string
-	JWTSecret         string
+	SupabaseURL       string
 	ListenAddr        string
 	LogLevel          string
 	ReadTimeout       time.Duration
@@ -23,10 +24,14 @@ type Config struct {
 	AppName           string
 }
 
+func (c *Config) JWKSURL() string {
+	return strings.TrimRight(c.SupabaseURL, "/") + "/auth/v1/.well-known/jwks.json"
+}
+
 func Load() (*Config, error) {
 	cfg := &Config{
 		DatabaseURL:        os.Getenv("DATABASE_URL"),
-		JWTSecret:          os.Getenv("JWT_SECRET"),
+		SupabaseURL:        os.Getenv("SUPABASE_URL"),
 		ListenAddr:         getEnv("LISTEN_ADDR", ":8080"),
 		LogLevel:           getEnv("LOG_LEVEL", "info"),
 		ReadTimeout:        getDuration("READ_TIMEOUT", 120*time.Second),
@@ -43,8 +48,8 @@ func Load() (*Config, error) {
 	if cfg.DatabaseURL == "" {
 		return nil, fmt.Errorf("DATABASE_URL is required")
 	}
-	if cfg.JWTSecret == "" {
-		return nil, fmt.Errorf("JWT_SECRET is required")
+	if cfg.SupabaseURL == "" {
+		return nil, fmt.Errorf("SUPABASE_URL is required for JWT verification via JWKS")
 	}
 
 	return cfg, nil

@@ -16,7 +16,7 @@ go build -o app-sync .
 
 # Configure
 export DATABASE_URL="postgres://..."
-export JWT_SECRET="your-secret"
+export SUPABASE_URL="https://<project-ref>.supabase.co"
 
 # Run
 ./app-sync
@@ -27,7 +27,7 @@ export JWT_SECRET="your-secret"
 | Env Var | Default | Description |
 |---------|---------|-------------|
 | `DATABASE_URL` | required | PostgreSQL connection string |
-| `JWT_SECRET` | required | HMAC-SHA256 key for JWT tokens |
+| `SUPABASE_URL` | required | Supabase project URL (used for JWKS-based JWT verification) |
 | `LISTEN_ADDR` | `:8080` | HTTP listen address |
 | `LOG_LEVEL` | `info` | Log level (debug/info/warn/error) |
 | `DB_MAX_CONNS` | `25` | Max database connections |
