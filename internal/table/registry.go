@@ -3,7 +3,7 @@ package table
 import "github.com/mobiletoly/go-oversync/oversync"
 
 // RegisteredTables returns all tables that participate in two-way sync.
-// These are the 21 tables from the Android app's PowerSync schema,
+// These are the 20 tables from the Android app's PowerSync schema,
 // all in the public schema with id as the sync key column.
 func RegisteredTables() []oversync.RegisteredTable {
 	t := func(name string) oversync.RegisteredTable {
@@ -11,7 +11,6 @@ func RegisteredTables() []oversync.RegisteredTable {
 	}
 	return []oversync.RegisteredTable{
 		t("inference_session"),
-		t("inference_message"),
 		t("chat_run"),
 		t("chat_turn"),
 		t("chat_card"),
