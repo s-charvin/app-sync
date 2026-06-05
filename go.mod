@@ -9,7 +9,7 @@ require (
 	github.com/mobiletoly/go-oversync v0.2.0
 )
 
-replace github.com/mobiletoly/go-oversync v0.2.0 => /Users/charvin/Projects/Android/go-oversync
+replace github.com/mobiletoly/go-oversync v0.2.0 => ./third_party/go-oversync
 
 require (
 	github.com/bytedance/gopkg v0.1.3 // indirect

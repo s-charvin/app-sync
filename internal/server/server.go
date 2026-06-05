@@ -62,11 +62,6 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*http.Se
 	r.GET("/syncx/status", gin.WrapH(http.HandlerFunc(sh.HandleStatus)))
 
 	auth := r.Group("")
-	validator := NewJWTValidator(cfg.JWKSURL())
-	if err := validator.FetchKeys(ctx); err != nil {
-		return nil, fmt.Errorf("jwt validator: %w", err)
-	}
-	auth.Use(jwtAuthMiddleware(validator))
 	auth.Use(jwtAuthMiddleware([]byte(cfg.JWTSecret), cfg.SupabaseURL))
 	auth.Any("/sync/*path", gin.WrapH(protectedHandler))
 

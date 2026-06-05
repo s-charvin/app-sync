@@ -1,0 +1,1250 @@
+openapi: 3.0.3
+info:
+  title: go-oversync Two-Way Sync API
+  version: 1.0.0
+  description: |
+    Bundle-based two-way sync API for single-user multi-device replication.
+
+    The server treats business tables as authoritative. Replication history is derived from
+    committed business-table effects and exposed as complete committed bundles. Registered
+    PostgreSQL tables are scope-bound on the server, but the hidden server owner column does not
+    appear on the wire.
+servers:
+  - url: http://localhost:8080
+    description: Development server
+paths:
+  /syncx/health:
+    get:
+      summary: Readiness health check
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '503':
+          description: Service is unhealthy or shutting down
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+
+  /syncx/status:
+    get:
+      summary: Service status snapshot
+      responses:
+        '200':
+          description: Service status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+
+  /sync/connect:
+    post:
+      summary: Resolve first-connect account attachment
+      description: |
+        Resolves whether the authenticated user's sync scope is already authoritative on the
+        server, whether this source may initialize it from local pending rows, whether the server
+        may initialize it empty, or whether the client should retry later because another
+        initializer currently owns the scope. `retry_later` is a normal lifecycle outcome, not an
+        authentication failure.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SourceIDHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConnectRequest'
+      responses:
+        '200':
+          description: Connect lifecycle resolved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectResponse'
+        '400':
+          description: Invalid connect request (`connect_invalid`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+        '503':
+          description: Service unavailable during graceful shutdown (`service_unavailable`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+
+  /sync/push-sessions:
+    post:
+      summary: Create or restart chunked push session
+      description: |
+        Creates or restarts the transport session for one logical dirty-set bundle identified by
+        `(source_id, source_bundle_id)`. If that tuple was already committed previously, the server
+        returns `already_committed` plus the authoritative committed bundle metadata instead of
+        creating a new staging session. If the tuple is already known but retained replay metadata
+        for that tuple has been pruned, the server returns `409 history_pruned` instead of
+        reopening staging. If `source_bundle_id` is not the next expected contiguous value for the
+        current source, the server returns `409 source_sequence_out_of_order`. If the current
+        source was explicitly retired during rotated rebuild, the server returns
+        `409 source_retired` with replacement lineage.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SourceIDHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PushSessionCreateRequest'
+      responses:
+        '200':
+          description: Push session created or already-committed result returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PushSessionCreateResponse'
+        '400':
+          description: Invalid push-session request (`push_session_invalid`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Scope not ready, retained replay for the requested source tuple is pruned, the source bundle sequence is not the next expected value, or the source was explicitly retired (`scope_uninitialized`, `scope_initializing`, `initialization_stale`, `history_pruned`, `source_sequence_out_of_order`, or `source_retired`)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ErrorResponse'
+                  - $ref: '#/components/schemas/SourceRetiredResponse'
+        '410':
+          description: Initialization lease expired before push create (`initialization_expired`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+        '503':
+          description: Service unavailable during graceful shutdown (`service_unavailable`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+
+  /sync/push-sessions/{push_id}/chunks:
+    post:
+      summary: Upload one ordered push chunk
+      description: |
+        Uploads one ordered chunk for a staging push session. `rows[]` reuse the `PushRequestRow`
+        contract exactly. `start_row_ordinal` must equal the next expected ordinal for the session.
+        Empty chunks are rejected. Chunks whose row count exceeds the server-advertised
+        `max_rows_per_push_chunk` are rejected fail-closed.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SourceIDHeader'
+        - name: push_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PushSessionChunkRequest'
+      responses:
+        '200':
+          description: Push chunk accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PushSessionChunkResponse'
+        '400':
+          description: Invalid chunk upload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Out-of-order chunk upload or stale initialization lease (`push_chunk_out_of_order` or `initialization_stale`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+        '403':
+          description: Push session belongs to a different user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Push session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '410':
+          description: Push session expired or initialization lease expired (`push_session_expired` or `initialization_expired`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable during graceful shutdown (`service_unavailable`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+
+  /sync/push-sessions/{push_id}/commit:
+    post:
+      summary: Commit one staged push session
+      description: |
+        Validates the full staged dirty set, runs whole-bundle conflict detection, and commits the
+        authoritative business-table effects atomically. On success, the response returns the
+        authoritative committed bundle metadata; the client fetches committed rows separately. If
+        the per-source bundle sequence changes between create-time validation and commit-time
+        finalization, the server returns `409 source_sequence_changed`. If the source was retired
+        after staging began, the server returns `409 source_retired`.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SourceIDHeader'
+        - name: push_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Push session committed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PushSessionCommitResponse'
+        '400':
+          description: Invalid commit request or incomplete staged rows
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+        '403':
+          description: Push session belongs to a different user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Push session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Whole-bundle conflict rejection, stale initialization lease, commit-time source sequence revalidation failure, or explicit source retirement (`push_conflict`, `initialization_stale`, `source_sequence_changed`, or `source_retired`)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/PushConflictResponse'
+                  - $ref: '#/components/schemas/ErrorResponse'
+                  - $ref: '#/components/schemas/SourceRetiredResponse'
+        '410':
+          description: Push session expired or initialization lease expired (`push_session_expired` or `initialization_expired`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable during graceful shutdown (`service_unavailable`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+
+  /sync/push-sessions/{push_id}:
+    delete:
+      summary: Delete uncommitted push session
+      description: Best-effort explicit cleanup of an uncommitted staging push session.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: push_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Push session deleted successfully
+        '400':
+          description: Invalid delete request (`push_chunk_invalid`, for example when the push session is already committed)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+        '403':
+          description: Push session belongs to a different user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Push session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '410':
+          description: Push session expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable during graceful shutdown (`service_unavailable`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+
+  /sync/committed-bundles/{bundle_seq}/rows:
+    get:
+      summary: Fetch authoritative committed bundle rows
+      description: |
+        Returns one deterministic page of the authoritative committed bundle row stream. `rows[]`
+        reuse the `BundleRow` contract exactly. Clients use this endpoint for authoritative replay
+        after chunked push commit and for post-commit crash recovery. Omit `after_row_ordinal` on
+        the first request; when provided, the server returns rows strictly after that ordinal.
+        For `bundle_hash` verification, clients reconstruct absolute `row_ordinal` from stream
+        position: the first row of the first page is ordinal 0, the first row after
+        `after_row_ordinal = N` is ordinal `N + 1`, and each following row increments by 1 in order.
+        Requests for bundles at or below the retained history floor return `409 history_pruned`
+        even if those rows have not yet been physically deleted.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SourceIDHeader'
+        - name: bundle_seq
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+        - name: after_row_ordinal
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+        - name: max_rows
+          in: query
+          required: false
+          description: Optional requested committed-bundle chunk size. Defaults to 1000, is capped by the server at 5000, and non-positive values are rejected.
+          schema:
+            type: integer
+            minimum: 1
+            default: 1000
+            maximum: 5000
+      responses:
+        '200':
+          description: Committed bundle row page retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommittedBundleRowsResponse'
+        '400':
+          description: Invalid committed-bundle row request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+        '409':
+          description: Requested committed bundle is below the retained history floor (`history_pruned`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Bundle not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable during graceful shutdown (`service_unavailable`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+
+  /sync/pull:
+    get:
+      summary: Pull committed bundles
+      description: |
+        Returns complete committed bundles only. The first response freezes a stable pull
+        ceiling (`stable_bundle_seq`). Follow-up requests should pass the same
+        `target_bundle_seq` until the client reaches that ceiling.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SourceIDHeader'
+      parameters:
+        - name: after_bundle_seq
+          in: query
+          required: false
+          description: Pull bundles strictly after this durable client checkpoint.
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+            default: 0
+        - name: max_bundles
+          in: query
+          required: false
+          description: Maximum number of complete bundles to return.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 5000
+            default: 1000
+        - name: target_bundle_seq
+          in: query
+          required: false
+          description: Frozen stable ceiling captured from the first response in a pull session.
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+      responses:
+        '200':
+          description: Pull page retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PullResponse'
+        '400':
+          description: Invalid pull parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+        '409':
+          description: Requested checkpoint is older than the retained bundle floor, or the scope is not initialized (`history_pruned`, `scope_uninitialized`, or `scope_initializing`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable during graceful shutdown (`service_unavailable`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+
+  /sync/snapshot-sessions:
+    post:
+      summary: Create frozen snapshot session
+      description: |
+        Creates one frozen current-state snapshot session for chunked hydration or recovery. The
+        request body is optional. When `source_replacement` is present, the server treats the
+        request as rotated rebuild intent, reserves the replacement source in `reserved` state, and
+        retires the authenticated previous source atomically with snapshot-session creation.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SourceIDHeader'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SnapshotSessionCreateRequest'
+      responses:
+        '200':
+          description: Snapshot session created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SnapshotSession'
+        '400':
+          description: Invalid snapshot-session create request (`snapshot_session_invalid`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Scope is not initialized enough for snapshot creation, the replacement source conflicts with durable state, or the previous source was already retired (`scope_uninitialized`, `scope_initializing`, `source_replacement_invalid`, or `source_retired`)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ErrorResponse'
+                  - $ref: '#/components/schemas/SourceRetiredResponse'
+        '401':
+          description: Authentication required
+        '503':
+          description: Service unavailable during graceful shutdown (`service_unavailable`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+
+  /sync/snapshot-sessions/{snapshot_id}:
+    get:
+      summary: Fetch one snapshot chunk
+      description: |
+        Returns one deterministic chunk from a frozen snapshot session.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SourceIDHeader'
+        - name: snapshot_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: after_row_ordinal
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+            default: 0
+        - name: max_rows
+          in: query
+          required: false
+          description: Optional requested snapshot chunk size. Defaults to 1000, is capped by the server at 5000, and non-positive values are rejected with `snapshot_chunk_invalid`.
+          schema:
+            type: integer
+            minimum: 1
+            default: 1000
+            maximum: 5000
+      responses:
+        '200':
+          description: Snapshot chunk retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SnapshotChunkResponse'
+        '400':
+          description: Invalid snapshot chunk request (`snapshot_chunk_invalid` for non-positive `max_rows` or invalid cursors)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+        '403':
+          description: Snapshot session belongs to a different user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Snapshot session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '410':
+          description: Snapshot session expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable during graceful shutdown (`service_unavailable`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+    delete:
+      summary: Delete snapshot session
+      description: Best-effort explicit cleanup of a frozen snapshot session.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SourceIDHeader'
+        - name: snapshot_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Snapshot session deleted successfully
+        '400':
+          description: Invalid snapshot-session delete request (`snapshot_chunk_invalid`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+        '403':
+          description: Snapshot session belongs to a different user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Snapshot session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable during graceful shutdown (`service_unavailable`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+
+  /sync/capabilities:
+    get:
+      summary: Get protocol capabilities
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SourceIDHeader'
+      responses:
+        '200':
+          description: Capabilities retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CapabilitiesResponse'
+        '401':
+          description: Authentication required
+
+components:
+  parameters:
+    SourceIDHeader:
+      name: Oversync-Source-ID
+      in: header
+      required: true
+      schema:
+        type: string
+      description: |
+        Current sync source identity for this authenticated request. This header is sync transport
+        metadata, not authentication. Direct protocol callers provide it explicitly; higher-level
+        clients such as oversqlite may manage it internally.
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    SyncKey:
+      type: object
+      additionalProperties: true
+      description: Canonical structured sync key for a row. Visible sync key values are strings on the wire. UUID-valued sync keys use canonical dashed lowercase UUID strings.
+
+    BundleRow:
+      type: object
+      required: [schema, table, key, op, row_version]
+      properties:
+        schema:
+          type: string
+          example: business
+        table:
+          type: string
+          example: users
+        key:
+          $ref: '#/components/schemas/SyncKey'
+        op:
+          type: string
+          enum: [INSERT, UPDATE, DELETE]
+        row_version:
+          type: integer
+          format: int64
+        payload:
+          type: object
+          nullable: true
+          additionalProperties: true
+          description: Full-row after-image for INSERT/UPDATE; omitted for DELETE in HTTP JSON. Hidden server columns such as _sync_scope_id are excluded. For bundle-hash verification, omitted DELETE payload normalizes to logical JSON null before hashing. Non-key binary payload fields use standard base64 on the wire.
+
+    Bundle:
+      type: object
+      required: [bundle_seq, source_id, source_bundle_id, rows]
+      properties:
+        bundle_seq:
+          type: integer
+          format: int64
+        source_id:
+          type: string
+        source_bundle_id:
+          type: integer
+          format: int64
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/BundleRow'
+
+    BundleHash:
+      type: string
+      description: Lowercase hex SHA-256 of the authoritative committed row stream, hashed over the canonical RFC 8785 JSON encoding defined by the active push-session spec. Hash verification uses logical normalized rows, including reconstructed absolute `row_ordinal` from committed-bundle stream position and logical `payload = null` for DELETE.
+      example: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+
+    PushRequestRow:
+      type: object
+      required: [schema, table, key, op, base_row_version]
+      properties:
+        schema:
+          type: string
+        table:
+          type: string
+        key:
+          $ref: '#/components/schemas/SyncKey'
+        op:
+          type: string
+          enum: [INSERT, UPDATE, DELETE]
+        base_row_version:
+          type: integer
+          format: int64
+        payload:
+          type: object
+          nullable: true
+          additionalProperties: true
+          description: Full-row after-image for INSERT/UPDATE; omitted for DELETE. Hidden server columns such as _sync_scope_id are excluded. Non-key binary payload fields use standard base64 on the wire.
+
+    PushSessionCreateRequest:
+      type: object
+      required: [source_bundle_id, planned_row_count]
+      properties:
+        source_bundle_id:
+          type: integer
+          format: int64
+          minimum: 1
+        planned_row_count:
+          type: integer
+          format: int64
+          minimum: 1
+        initialization_id:
+          type: string
+          description: Required when this push session is seeding an uninitialized scope under an active initialization lease.
+
+    ConnectRequest:
+      type: object
+      required: [has_local_pending_rows]
+      properties:
+        has_local_pending_rows:
+          type: boolean
+          description: Whether this client captured anonymous local rows that could seed an uninitialized scope.
+
+    ConnectResponse:
+      type: object
+      required: [resolution]
+      properties:
+        resolution:
+          type: string
+          enum: [remote_authoritative, initialize_local, initialize_empty, retry_later]
+        initialization_id:
+          type: string
+          description: Exclusive initialization lease token to carry through the first seed push when `resolution = initialize_local`.
+        lease_expires_at:
+          type: string
+          format: date-time
+          description: Lease expiry for `initialize_local` and `retry_later` responses when the server currently tracks an initializer.
+        retry_after_seconds:
+          type: integer
+          minimum: 1
+          description: Suggested retry backoff when `resolution = retry_later`.
+
+    PushSessionCreateResponse:
+      oneOf:
+        - $ref: '#/components/schemas/PushSessionCreateStagingResponse'
+        - $ref: '#/components/schemas/PushSessionCreateAlreadyCommittedResponse'
+
+    PushSessionCreateStagingResponse:
+      type: object
+      required: [push_id, status, planned_row_count, next_expected_row_ordinal]
+      properties:
+        push_id:
+          type: string
+        status:
+          type: string
+          enum: [staging]
+        planned_row_count:
+          type: integer
+          format: int64
+        next_expected_row_ordinal:
+          type: integer
+          format: int64
+          minimum: 0
+
+    PushSessionCreateAlreadyCommittedResponse:
+      type: object
+      required: [status, bundle_seq, source_id, source_bundle_id, row_count, bundle_hash]
+      properties:
+        status:
+          type: string
+          enum: [already_committed]
+        bundle_seq:
+          type: integer
+          format: int64
+        source_id:
+          type: string
+        source_bundle_id:
+          type: integer
+          format: int64
+        row_count:
+          type: integer
+          format: int64
+        bundle_hash:
+          $ref: '#/components/schemas/BundleHash'
+
+    PushSessionChunkRequest:
+      type: object
+      required: [start_row_ordinal, rows]
+      properties:
+        start_row_ordinal:
+          type: integer
+          format: int64
+          minimum: 0
+        rows:
+          type: array
+          minItems: 1
+          description: Ordered push rows for this chunk. Empty arrays are rejected. Arrays longer than the server-advertised `max_rows_per_push_chunk` are rejected fail-closed.
+          items:
+            $ref: '#/components/schemas/PushRequestRow'
+
+    PushSessionChunkResponse:
+      type: object
+      required: [push_id, next_expected_row_ordinal]
+      properties:
+        push_id:
+          type: string
+        next_expected_row_ordinal:
+          type: integer
+          format: int64
+
+    PushSessionCommitResponse:
+      type: object
+      required: [bundle_seq, source_id, source_bundle_id, row_count, bundle_hash]
+      properties:
+        bundle_seq:
+          type: integer
+          format: int64
+        source_id:
+          type: string
+        source_bundle_id:
+          type: integer
+          format: int64
+        row_count:
+          type: integer
+          format: int64
+        bundle_hash:
+          $ref: '#/components/schemas/BundleHash'
+
+    PullResponse:
+      type: object
+      required: [stable_bundle_seq, bundles, has_more]
+      properties:
+        stable_bundle_seq:
+          type: integer
+          format: int64
+        bundles:
+          type: array
+          items:
+            $ref: '#/components/schemas/Bundle'
+        has_more:
+          type: boolean
+
+    SnapshotRow:
+      type: object
+      required: [schema, table, key, row_version, payload]
+      properties:
+        schema:
+          type: string
+        table:
+          type: string
+        key:
+          $ref: '#/components/schemas/SyncKey'
+        row_version:
+          type: integer
+          format: int64
+        payload:
+          type: object
+          additionalProperties: true
+          description: Full-row after-image for one current row. Hidden server columns such as _sync_scope_id are excluded. Non-key binary payload fields use standard base64 on the wire.
+
+    SnapshotSessionCreateRequest:
+      type: object
+      properties:
+        source_replacement:
+          $ref: '#/components/schemas/SnapshotSourceReplacement'
+
+    SnapshotSourceReplacement:
+      type: object
+      required: [previous_source_id, new_source_id, reason]
+      properties:
+        previous_source_id:
+          type: string
+          description: Must match the authenticated `Oversync-Source-ID`.
+        new_source_id:
+          type: string
+          description: Fresh replacement writer identity reserved for the rotated rebuild.
+        reason:
+          type: string
+          enum: [history_pruned, source_sequence_out_of_order, source_sequence_changed, source_retired]
+
+    CommittedBundleRowsResponse:
+      type: object
+      required: [bundle_seq, source_id, source_bundle_id, row_count, bundle_hash, rows, next_row_ordinal, has_more]
+      properties:
+        bundle_seq:
+          type: integer
+          format: int64
+        source_id:
+          type: string
+        source_bundle_id:
+          type: integer
+          format: int64
+        row_count:
+          type: integer
+          format: int64
+        bundle_hash:
+          $ref: '#/components/schemas/BundleHash'
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/BundleRow'
+        next_row_ordinal:
+          type: integer
+          format: int64
+          description: Last returned row ordinal. If no rows are returned, echoes the supplied `after_row_ordinal`; when the request omitted `after_row_ordinal` and no rows are returned, this is `0`.
+        has_more:
+          type: boolean
+          description: True iff additional committed-bundle rows exist after `next_row_ordinal`.
+
+    SnapshotSession:
+      type: object
+      required: [snapshot_id, snapshot_bundle_seq, row_count, expires_at]
+      properties:
+        snapshot_id:
+          type: string
+        snapshot_bundle_seq:
+          type: integer
+          format: int64
+        row_count:
+          type: integer
+          format: int64
+        byte_count:
+          type: integer
+          format: int64
+        expires_at:
+          type: string
+          format: date-time
+
+    SnapshotChunkResponse:
+      type: object
+      required: [snapshot_id, snapshot_bundle_seq, rows, next_row_ordinal, has_more]
+      properties:
+        snapshot_id:
+          type: string
+        snapshot_bundle_seq:
+          type: integer
+          format: int64
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/SnapshotRow'
+        next_row_ordinal:
+          type: integer
+          format: int64
+        has_more:
+          type: boolean
+
+    BundleCapabilitiesLimits:
+      type: object
+      properties:
+        max_rows_per_bundle:
+          type: integer
+        max_bytes_per_bundle:
+          type: integer
+        max_bundles_per_pull:
+          type: integer
+        default_rows_per_push_chunk:
+          type: integer
+          description: Default client/server target chunk size for `POST /sync/push-sessions/{push_id}/chunks`.
+        max_rows_per_push_chunk:
+          type: integer
+          description: Maximum row count the server will accept in one push-session chunk upload.
+        push_session_ttl_seconds:
+          type: integer
+          description: Server-side time-to-live for uncommitted push sessions before expiry cleanup.
+        default_rows_per_committed_bundle_chunk:
+          type: integer
+          description: Default chunk size the server uses when `max_rows` is omitted on committed-bundle row fetch.
+        max_rows_per_committed_bundle_chunk:
+          type: integer
+          description: Maximum chunk size the server will honor for one committed-bundle row fetch.
+        default_rows_per_snapshot_chunk:
+          type: integer
+          description: Default chunk size the server uses when `max_rows` is omitted on snapshot chunk fetch.
+        max_rows_per_snapshot_chunk:
+          type: integer
+          description: Maximum chunk size the server will honor for one snapshot chunk fetch.
+        snapshot_session_ttl_seconds:
+          type: integer
+          description: Server-side time-to-live for frozen snapshot sessions before expiry cleanup.
+        max_rows_per_snapshot_session:
+          type: integer
+          format: int64
+          description: Maximum total row count the server will allow when materializing one frozen snapshot session.
+        max_bytes_per_snapshot_session:
+          type: integer
+          format: int64
+          description: Maximum total payload size in bytes the server will allow when materializing one frozen snapshot session.
+        initialization_lease_ttl_seconds:
+          type: integer
+          description: Server-side lease duration for exclusive first-initializer rights.
+
+    RegisteredTableSpec:
+      type: object
+      required: [schema, table]
+      properties:
+        schema:
+          type: string
+        table:
+          type: string
+        sync_key_columns:
+          type: array
+          items:
+            type: string
+
+    CapabilitiesResponse:
+      type: object
+      required: [protocol_version, schema_version, features]
+      properties:
+        protocol_version:
+          type: string
+          example: v1
+        schema_version:
+          type: integer
+        app_name:
+          type: string
+        registered_tables:
+          type: array
+          items:
+            type: string
+        registered_table_specs:
+          type: array
+          items:
+            $ref: '#/components/schemas/RegisteredTableSpec'
+        features:
+          type: object
+          additionalProperties:
+            type: boolean
+          example:
+            push_session_chunking: true
+            committed_bundle_row_fetch: true
+            bundle_pull: true
+            snapshot_chunking: true
+            connect_lifecycle: true
+            history_pruned_errors: true
+            registered_write_rejection_enforced: true
+            accepted_push_replay_visibility: true
+            committed_bundle_visibility: true
+        bundle_limits:
+          $ref: '#/components/schemas/BundleCapabilitiesLimits'
+
+    ErrorResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+
+    SourceRetiredResponse:
+      type: object
+      required: [error, message, source_id]
+      properties:
+        error:
+          type: string
+          enum: [source_retired]
+        message:
+          type: string
+        source_id:
+          type: string
+        replaced_by_source_id:
+          type: string
+          description: Replacement source reserved or activated for the retired source when known.
+
+    PushConflictResponse:
+      type: object
+      required: [error, message, conflict]
+      properties:
+        error:
+          type: string
+          enum: [push_conflict]
+        message:
+          type: string
+        conflict:
+          $ref: '#/components/schemas/PushConflictDetails'
+
+    PushConflictDetails:
+      type: object
+      required:
+        - schema
+        - table
+        - key
+        - op
+        - base_row_version
+        - server_row_version
+        - server_row_deleted
+        - server_row
+      properties:
+        schema:
+          type: string
+        table:
+          type: string
+        key:
+          type: object
+          additionalProperties:
+            type: string
+        op:
+          type: string
+          enum: [INSERT, UPDATE, DELETE]
+        base_row_version:
+          type: integer
+          format: int64
+          minimum: 0
+        server_row_version:
+          type: integer
+          format: int64
+          minimum: 0
+        server_row_deleted:
+          type: boolean
+        server_row:
+          type: object
+          nullable: true
+          additionalProperties: true
+          description: Authoritative server row after-image for conflict recovery. Hidden server columns such as _sync_scope_id are excluded.
+
+    StatusResponse:
+      type: object
+      required:
+        - status
+        - version
+        - app_name
+        - lifecycle
+        - accepting_operations
+        - inflight_operations
+        - registered_tables
+        - features
+        - latest_bundle_seq_max
+        - retained_bundle_floor_min
+        - retained_bundle_floor_max
+        - retained_bundle_window_min
+        - retained_bundle_window_max
+        - history_pruned_error_count
+        - accepted_push_replay_count
+        - rejected_registered_write_count
+        - committed_bundle_count
+        - committed_bundle_bytes
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy]
+        version:
+          type: string
+        app_name:
+          type: string
+        lifecycle:
+          type: string
+          enum: [running, shutting_down, closed]
+        accepting_operations:
+          type: boolean
+        inflight_operations:
+          type: integer
+        registered_tables:
+          type: array
+          items:
+            type: string
+        features:
+          type: object
+          additionalProperties:
+            type: boolean
+        user_state_retention_floor_ahead_count:
+          type: integer
+          format: int64
+        latest_bundle_seq_max:
+          type: integer
+          format: int64
+        retained_bundle_floor_min:
+          type: integer
+          format: int64
+        retained_bundle_floor_max:
+          type: integer
+          format: int64
+        retained_bundle_window_min:
+          type: integer
+          format: int64
+        retained_bundle_window_max:
+          type: integer
+          format: int64
+        history_pruned_error_count:
+          type: integer
+          format: int64
+        accepted_push_replay_count:
+          type: integer
+          format: int64
+        rejected_registered_write_count:
+          type: integer
+          format: int64
+        committed_bundle_count:
+          type: integer
+          format: int64
+        committed_bundle_bytes:
+          type: integer
+          format: int64
