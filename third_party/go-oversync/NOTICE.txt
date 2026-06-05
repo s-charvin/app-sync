@@ -1,6 +1,0 @@
-Project: go-oversync
-Copyright 2025 Toly Pochkin
-
-This product includes software developed by Toly Pochkin.
-Original repository: https://github.com/mobiletoly/go-oversync
-
