@@ -177,6 +177,10 @@ type ServiceConfig struct {
 	// is found, creates an initial seed bundle so the client can pull it.
 	AutoSeedInitialBundle bool
 
+	// SeedSystemData is an optional hook called during connect to copy
+	// system data into per-user tables. Set by the application layer.
+	SeedSystemData func(ctx context.Context, tx pgx.Tx, userID string, logger *slog.Logger) error
+
 	// MaxRowsPerInitialSeed limits the number of rows the initial seed will
 	// process. 0 means unlimited. Default recommendation: 100000.
 	MaxRowsPerInitialSeed int64

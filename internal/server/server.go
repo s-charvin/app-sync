@@ -12,6 +12,7 @@ import (
 	"github.com/mobiletoly/go-oversync/oversync"
 
 	"github.com/s-charvin/app-sync/internal/config"
+	"github.com/s-charvin/app-sync/internal/seed"
 	"github.com/s-charvin/app-sync/internal/table"
 )
 
@@ -26,6 +27,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*http.Se
 		MaxSupportedSchemaVersion: 1,
 		RegisteredTables:         table.RegisteredTables(),
 		AutoSeedInitialBundle:    true,
+		SeedSystemData:           seed.SystemData,
 		MaxRowsPerInitialSeed:    100000,
 	}
 

@@ -48,8 +48,10 @@ func (s *SyncService) Connect(ctx context.Context, actor Actor, req *ConnectRequ
 		case scopeStateInitialized:
 			resp = &ConnectResponse{Resolution: "remote_authoritative"}
 				if s.config != nil && s.config.AutoSeedInitialBundle {
-				if err := s.seedSystemData(ctx, tx, actor.UserID); err != nil {
+				if s.config != nil && s.config.SeedSystemData != nil {
+				if err := s.config.SeedSystemData(ctx, tx, actor.UserID, s.logger); err != nil {
 				s.logger.Warn("seed system data failed", "user_id", actor.UserID, "error", err)
+				}
 				}
 				}
 			return nil
@@ -74,8 +76,10 @@ func (s *SyncService) Connect(ctx context.Context, actor Actor, req *ConnectRequ
 					s.logger.Info("auto-seeded initial bundle from existing data",
 						"user_id", actor.UserID)
 				}
-				if err := s.seedSystemData(ctx, tx, actor.UserID); err != nil {
+				if s.config != nil && s.config.SeedSystemData != nil {
+				if err := s.config.SeedSystemData(ctx, tx, actor.UserID, s.logger); err != nil {
 					s.logger.Warn("seed system data failed", "user_id", actor.UserID, "error", err)
+				}
 				}
 				}
 
