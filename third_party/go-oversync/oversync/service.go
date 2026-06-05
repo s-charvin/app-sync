@@ -330,6 +330,9 @@ func (s *SyncService) Bootstrap(ctx context.Context) error {
 		return fmt.Errorf("failed to discover schema relationships: %w", err)
 	}
 	if err := s.installRegisteredTableCaptureTriggers(ctx); err != nil {
+	if err := s.backfillSyncScopeID(ctx); err != nil {
+		s.logger.Warn("Failed to backfill _sync_scope_id", "error", err)
+	}
 		return fmt.Errorf("failed to install registered table capture triggers: %w", err)
 	}
 	return nil

@@ -711,9 +711,15 @@ func (s *SyncService) discoverSchemaRelationships(ctx context.Context) error {
 }
 
 // backfillSyncScopeID backfills _sync_scope_id column for rows
-// where it is NULL and user_id is NOT NULL. This makes existing
-// row data visible to auto-seed after capture triggers are installed.
-func (s *SyncService) backfillSyncScopeID(ctx context.Context, tx pgx.Tx) error {
+// where it is NULL and user_id is NOT NULL. Runs outside any
+// transaction so individual table failures do not cascade.
+func (s *SyncService) backfillSyncScopeID(ctx context.Context) error {
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire connection: %w", err)
+	}
+	defer conn.Release()
+
 	tableInfos := make([]registeredTableRuntimeInfo, 0, len(s.registeredTableByID))
 	for _, info := range s.registeredTableByID {
 		tableInfos = append(tableInfos, info)
@@ -722,12 +728,19 @@ func (s *SyncService) backfillSyncScopeID(ctx context.Context, tx pgx.Tx) error 
 		return tableInfos[i].tableID < tableInfos[j].tableID
 	})
 	for _, info := range tableInfos {
+		var hasUserID bool
+		if err := conn.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=$1 AND table_name=$2 AND column_name='user_id')`,
+			info.schemaName, info.tableName,
+		).Scan(&hasUserID); err != nil || !hasUserID {
+			continue
+		}
 		tableIdent := pgx.Identifier{info.schemaName, info.tableName}.Sanitize()
 		query := fmt.Sprintf(`
 			UPDATE %s SET _sync_scope_id = user_id
 			WHERE _sync_scope_id IS NULL AND user_id IS NOT NULL
 		`, tableIdent)
-		tag, err := tx.Exec(ctx, query)
+		tag, err := conn.Exec(ctx, query)
 		if err != nil {
 			s.logger.Warn("backfill _sync_scope_id failed, skipping",
 				"table", info.tableName, "error", err)

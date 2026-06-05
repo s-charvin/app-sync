@@ -113,9 +113,6 @@ func (s *SyncService) installRegisteredTableCaptureTriggers(ctx context.Context)
 				}
 			}
 		}
-		if err := s.backfillSyncScopeID(ctx, tx); err != nil {
-			s.logger.Warn("Failed to backfill _sync_scope_id", "error", err)
-		}
 		return nil
 	})
 }
