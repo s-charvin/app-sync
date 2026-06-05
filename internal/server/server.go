@@ -25,6 +25,8 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*http.Se
 		AppName:                  cfg.AppName,
 		MaxSupportedSchemaVersion: 1,
 		RegisteredTables:         table.RegisteredTables(),
+		AutoSeedInitialBundle:    true,
+		MaxRowsPerInitialSeed:    100000,
 	}
 
 	svc, err := oversync.NewRuntimeService(pool, svcCfg, logger)
@@ -65,6 +67,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*http.Se
 		return nil, fmt.Errorf("jwt validator: %w", err)
 	}
 	auth.Use(jwtAuthMiddleware(validator))
+	auth.Use(jwtAuthMiddleware([]byte(cfg.JWTSecret), cfg.SupabaseURL))
 	auth.Any("/sync/*path", gin.WrapH(protectedHandler))
 
 	srv := &http.Server{

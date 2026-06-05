@@ -10,6 +10,7 @@ import (
 
 type Config struct {
 	DatabaseURL       string
+	JWTSecret         string
 	SupabaseURL       string
 	ListenAddr        string
 	LogLevel          string
@@ -31,6 +32,7 @@ func (c *Config) JWKSURL() string {
 func Load() (*Config, error) {
 	cfg := &Config{
 		DatabaseURL:        os.Getenv("DATABASE_URL"),
+		JWTSecret:          os.Getenv("JWT_SECRET"),
 		SupabaseURL:        os.Getenv("SUPABASE_URL"),
 		ListenAddr:         getEnv("LISTEN_ADDR", ":8080"),
 		LogLevel:           getEnv("LOG_LEVEL", "info"),

@@ -9,6 +9,8 @@ require (
 	github.com/mobiletoly/go-oversync v0.2.0
 )
 
+replace github.com/mobiletoly/go-oversync v0.2.0 => /Users/charvin/Projects/Android/go-oversync
+
 require (
 	github.com/bytedance/gopkg v0.1.3 // indirect
 	github.com/bytedance/sonic v1.15.0 // indirect

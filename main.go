@@ -38,7 +38,7 @@ func main() {
 		Level: logLevel,
 	}))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	srv, err := server.New(ctx, cfg, logger)
