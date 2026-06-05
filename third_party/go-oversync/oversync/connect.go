@@ -74,6 +74,9 @@ func (s *SyncService) Connect(ctx context.Context, actor Actor, req *ConnectRequ
 					s.logger.Info("auto-seeded initial bundle from existing data",
 						"user_id", actor.UserID)
 				}
+				if err := s.seedSystemData(ctx, tx, actor.UserID); err != nil {
+					s.logger.Warn("seed system data failed", "user_id", actor.UserID, "error", err)
+				}
 				}
 
 				if err := transitionScopeToInitialized(ctx, tx, actor.UserID, actor.SourceID); err != nil {
