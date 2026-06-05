@@ -6,6 +6,7 @@ package oversync
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -706,5 +707,36 @@ func (s *SyncService) discoverSchemaRelationships(ctx context.Context) error {
 		"cycle_count", len(discoveredSchema.Cycles),
 		"table_order", discoveredSchema.TableOrder)
 
+	return nil
+}
+
+// backfillSyncScopeID backfills _sync_scope_id column for rows
+// where it is NULL and user_id is NOT NULL. This makes existing
+// row data visible to auto-seed after capture triggers are installed.
+func (s *SyncService) backfillSyncScopeID(ctx context.Context, tx pgx.Tx) error {
+	tableInfos := make([]registeredTableRuntimeInfo, 0, len(s.registeredTableByID))
+	for _, info := range s.registeredTableByID {
+		tableInfos = append(tableInfos, info)
+	}
+	sort.Slice(tableInfos, func(i, j int) bool {
+		return tableInfos[i].tableID < tableInfos[j].tableID
+	})
+	for _, info := range tableInfos {
+		tableIdent := pgx.Identifier{info.schemaName, info.tableName}.Sanitize()
+		query := fmt.Sprintf(`
+			UPDATE %s SET _sync_scope_id = user_id
+			WHERE _sync_scope_id IS NULL AND user_id IS NOT NULL
+		`, tableIdent)
+		tag, err := tx.Exec(ctx, query)
+		if err != nil {
+			s.logger.Warn("backfill _sync_scope_id failed, skipping",
+				"table", info.tableName, "error", err)
+			continue
+		}
+		if tag.RowsAffected() > 0 {
+			s.logger.Info("backfilled _sync_scope_id",
+				"table", info.tableName, "rows", tag.RowsAffected())
+		}
+	}
 	return nil
 }
