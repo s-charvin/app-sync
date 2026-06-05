@@ -47,6 +47,11 @@ func (s *SyncService) Connect(ctx context.Context, actor Actor, req *ConnectRequ
 		switch state.State {
 		case scopeStateInitialized:
 			resp = &ConnectResponse{Resolution: "remote_authoritative"}
+				if s.config != nil && s.config.AutoSeedInitialBundle {
+				if err := s.seedSystemData(ctx, tx, actor.UserID); err != nil {
+				s.logger.Warn("seed system data failed", "user_id", actor.UserID, "error", err)
+				}
+				}
 			return nil
 		case scopeStateUninitialized:
 			if req.HasLocalPendingRows {
@@ -69,12 +74,9 @@ func (s *SyncService) Connect(ctx context.Context, actor Actor, req *ConnectRequ
 					s.logger.Info("auto-seeded initial bundle from existing data",
 						"user_id", actor.UserID)
 				}
-
-				if err := s.seedSystemData(ctx, tx, actor.UserID); err != nil {
-					s.logger.Warn("seed system data failed, continuing", "user_id", actor.UserID, "error", err)
 				}
-			}
-			if err := transitionScopeToInitialized(ctx, tx, actor.UserID, actor.SourceID); err != nil {
+
+				if err := transitionScopeToInitialized(ctx, tx, actor.UserID, actor.SourceID); err != nil {
 				return err
 			}
 			resp = &ConnectResponse{Resolution: "initialize_empty"}
