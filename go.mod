@@ -10,7 +10,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 )
 
-replace github.com/mobiletoly/go-oversync v0.2.0 => ./third_party/go-oversync
+replace github.com/mobiletoly/go-oversync v0.2.0 => ../third_party/go-oversync
 
 require (
 	github.com/bytedance/sonic v1.14.0 // indirect
