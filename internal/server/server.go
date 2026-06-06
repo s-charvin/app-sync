@@ -1,8 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -45,7 +48,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*http.Se
 		UserIDFromContext: UserIDFromContext,
 	})
 
-	syncMux := newSyncMux(sh)
+	syncMux := newSyncMux(sh, pool, logger)
 	protectedHandler := actorMW(syncMux)
 
 	gin.SetMode(gin.ReleaseMode)
@@ -90,9 +93,9 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*http.Se
 	return srv, nil
 }
 
-func newSyncMux(sh *oversync.HTTPSyncHandlers) *http.ServeMux {
+func newSyncMux(sh *oversync.HTTPSyncHandlers, pool *pgxpool.Pool, logger *slog.Logger) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /sync/connect", sh.HandleConnect)
+	mux.HandleFunc("POST /sync/connect", autoSeedConnect(sh.HandleConnect, pool, logger))
 	mux.HandleFunc("POST /sync/push-sessions", sh.HandleCreatePushSession)
 	mux.HandleFunc("POST /sync/push-sessions/{push_id}/chunks", sh.HandlePushSessionChunk)
 	mux.HandleFunc("POST /sync/push-sessions/{push_id}/commit", sh.HandleCommitPushSession)
@@ -104,6 +107,76 @@ func newSyncMux(sh *oversync.HTTPSyncHandlers) *http.ServeMux {
 	mux.HandleFunc("DELETE /sync/snapshot-sessions/{snapshot_id}", sh.HandleDeleteSnapshotSession)
 	mux.HandleFunc("GET /sync/capabilities", sh.HandleCapabilities)
 	return mux
+}
+
+type responseBuffer struct {
+	header     http.Header
+	body       bytes.Buffer
+	statusCode int
+}
+
+func (r *responseBuffer) Header() http.Header { return r.header }
+func (r *responseBuffer) Write(b []byte) (int, error) {
+	return r.body.Write(b)
+}
+func (r *responseBuffer) WriteHeader(statusCode int) { r.statusCode = statusCode }
+
+func autoSeedConnect(original http.HandlerFunc, pool *pgxpool.Pool, logger *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rec := &responseBuffer{header: make(http.Header), statusCode: http.StatusOK}
+		original(rec, r)
+
+		userID, _ := r.Context().Value(userIDCtxKey).(string)
+		if userID == "" {
+			logger.Warn("auto-seed: no user_id in connect context")
+		} else if rec.statusCode != http.StatusOK {
+			logger.Warn("auto-seed: connect returned non-OK status, skipping seed check",
+				"user_id", userID, "connect_status", rec.statusCode)
+		} else {
+			var resp struct{ Resolution string }
+			if err := json.Unmarshal(rec.body.Bytes(), &resp); err != nil {
+				logger.Error("auto-seed: failed to parse connect response",
+					"user_id", userID, "error", err)
+			} else {
+				logger.Info("auto-seed: connect completed",
+					"user_id", userID, "resolution", resp.Resolution)
+
+				if resp.Resolution == "initialize_empty" || resp.Resolution == "remote_authoritative" {
+					nextSeq, hasBundles := userBundleState(r.Context(), pool, userID)
+					if !hasBundles {
+						logger.Info("auto-seed: user has no bundles, seeding system data",
+							"user_id", userID, "next_bundle_seq", nextSeq, "resolution", resp.Resolution)
+						if err := seed.SystemData(r.Context(), pool, userID, logger); err != nil {
+							logger.Error("auto-seed: seed failed",
+								"user_id", userID, "error", err)
+						}
+					} else {
+						logger.Info("auto-seed: user already has bundles, skipping",
+							"user_id", userID, "next_bundle_seq", nextSeq)
+					}
+				} else {
+					logger.Info("auto-seed: resolution does not require seed check",
+						"user_id", userID, "resolution", resp.Resolution)
+				}
+			}
+		}
+
+		for k, v := range rec.header {
+			w.Header()[k] = v
+		}
+		w.WriteHeader(rec.statusCode)
+		io.Copy(w, &rec.body)
+	}
+}
+
+func userBundleState(ctx context.Context, pool *pgxpool.Pool, userID string) (nextBundleSeq int64, hasNoBundles bool) {
+	err := pool.QueryRow(ctx,
+		`SELECT next_bundle_seq FROM sync.user_state WHERE user_id = $1`, userID,
+	).Scan(&nextBundleSeq)
+	if err != nil {
+		return 0, false
+	}
+	return nextBundleSeq, nextBundleSeq <= 1
 }
 
 func requestLogger(logger *slog.Logger) gin.HandlerFunc {
