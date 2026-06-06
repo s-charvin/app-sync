@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -39,13 +38,8 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*http.Se
 	}
 
 	if err := svc.Bootstrap(ctx); err != nil {
-		if strings.Contains(err.Error(), "must be owner of relation") || strings.Contains(err.Error(), "SQLSTATE 42501") {
-			logger.Warn("bootstrap: skipping trigger re-install (insufficient table ownership), triggers already exist from prior deploy",
-				"detail", err.Error())
-		} else {
-			pool.Close()
-			return nil, fmt.Errorf("bootstrap: %w", err)
-		}
+		pool.Close()
+		return nil, fmt.Errorf("bootstrap: %w", err)
 	}
 
 	sh := oversync.NewHTTPSyncHandlers(svc, logger)
