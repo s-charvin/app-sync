@@ -51,26 +51,3 @@ jobs:
             systemctl restart app-sync
             sleep 2
             systemctl status app-sync --no-pager
-
-      - name: Deploy to server
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          source: app-sync-linux-amd64
-          target: /tmp/
-          strip_components: 0
-
-      - name: Restart service
-        uses: appleboy/ssh-action@v1.2.2
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          script: |
-            systemctl stop app-sync
-            cp /tmp/app-sync-linux-amd64 /usr/local/bin/app-sync
-            systemctl start app-sync
-            sleep 2
-            systemctl status app-sync --no-pager
