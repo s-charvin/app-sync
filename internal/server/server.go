@@ -142,17 +142,23 @@ func autoSeedConnect(original http.HandlerFunc, pool *pgxpool.Pool, logger *slog
 					"user_id", userID, "resolution", resp.Resolution)
 
 				if resp.Resolution == "initialize_empty" || resp.Resolution == "remote_authoritative" {
-					nextSeq, hasBundles := userBundleState(r.Context(), pool, userID)
-					if !hasBundles {
-						logger.Info("auto-seed: user has no bundles, seeding system data",
-							"user_id", userID, "next_bundle_seq", nextSeq, "resolution", resp.Resolution)
+					state, err := checkUserSeedState(r.Context(), pool, userID)
+					if err != nil {
+						logger.Warn("auto-seed: failed to check seed state",
+							"user_id", userID, "error", err)
+					} else if state.HasSeed {
+						logger.Info("auto-seed: system data already seeded, skipping",
+							"user_id", userID)
+					} else if state.NextBundleSeq <= 1 {
+						logger.Info("auto-seed: seeding system data",
+							"user_id", userID, "next_bundle_seq", state.NextBundleSeq)
 						if err := seed.SystemData(r.Context(), pool, userID, logger); err != nil {
 							logger.Error("auto-seed: seed failed",
 								"user_id", userID, "error", err)
 						}
 					} else {
 						logger.Info("auto-seed: user already has bundles, skipping",
-							"user_id", userID, "next_bundle_seq", nextSeq)
+							"user_id", userID, "next_bundle_seq", state.NextBundleSeq)
 					}
 				} else {
 					logger.Info("auto-seed: resolution does not require seed check",
@@ -169,14 +175,28 @@ func autoSeedConnect(original http.HandlerFunc, pool *pgxpool.Pool, logger *slog
 	}
 }
 
-func userBundleState(ctx context.Context, pool *pgxpool.Pool, userID string) (nextBundleSeq int64, hasNoBundles bool) {
-	err := pool.QueryRow(ctx,
-		`SELECT next_bundle_seq FROM sync.user_state WHERE user_id = $1`, userID,
-	).Scan(&nextBundleSeq)
+type userSeedState struct {
+	NextBundleSeq int64
+	HasSeed       bool
+}
+
+func checkUserSeedState(ctx context.Context, pool *pgxpool.Pool, userID string) (*userSeedState, error) {
+	var state userSeedState
+	err := pool.QueryRow(ctx, `
+		SELECT
+			us.next_bundle_seq,
+			EXISTS(
+				SELECT 1 FROM sync.bundle_log bl
+				WHERE bl.user_pk = us.user_pk
+				  AND bl.source_id = $2
+			) AS has_seed
+		FROM sync.user_state us
+		WHERE us.user_id = $1
+	`, userID, seed.SourceIDSystemSeed).Scan(&state.NextBundleSeq, &state.HasSeed)
 	if err != nil {
-		return 0, false
+		return nil, err
 	}
-	return nextBundleSeq, nextBundleSeq <= 1
+	return &state, nil
 }
 
 func requestLogger(logger *slog.Logger) gin.HandlerFunc {

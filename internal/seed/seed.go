@@ -8,7 +8,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const sentinelScope = "00000000-0000-0000-0000-000000000000"
+const (
+	sentinelScope      = "00000000-0000-0000-0000-000000000000"
+	SourceIDSystemSeed = "system-seed"
+)
 
 func SystemData(ctx context.Context, pool *pgxpool.Pool, userID string, logger *slog.Logger) error {
 	tx, err := pool.Begin(ctx)
@@ -16,6 +19,17 @@ func SystemData(ctx context.Context, pool *pgxpool.Pool, userID string, logger *
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
+
+	// 检查是否已 seed 过，避免重复分配 bundle_seq
+	var existingBundleCount int64
+	if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM sync.bundle_log WHERE user_pk = (SELECT user_pk FROM sync.user_state WHERE user_id = $1) AND source_id = $2`, userID, "system-seed").Scan(&existingBundleCount); err != nil {
+		return fmt.Errorf("check existing seed: %w", err)
+	}
+	if existingBundleCount > 0 {
+		logger.Info("seed: system data already seeded, skipping", "user_id", userID)
+		return tx.Commit(ctx)
+	}
+
 
 	var userPK int64
 	if err := tx.QueryRow(ctx, `SELECT user_pk FROM sync.user_state WHERE user_id = $1`, userID).Scan(&userPK); err != nil {
