@@ -9,17 +9,48 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: app-sync
+
+      - uses: actions/checkout@v4
+        with:
+          repository: mobiletoly/go-oversync
+          ref: v0.2.0
+          path: third_party/go-oversync
 
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
           cache: true
+          cache-dependency-path: app-sync/go.sum
 
       - name: Build
+        working-directory: app-sync
         run: |
-          go mod edit -dropreplace github.com/mobiletoly/go-oversync
-          go mod tidy
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -buildvcs=false -o app-sync-linux-amd64 .
+
+      - name: Deploy to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          source: app-sync/app-sync-linux-amd64
+          target: /tmp/
+          strip_components: 1
+
+      - name: Restart service
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            mv /tmp/app-sync-linux-amd64 /usr/local/bin/app-sync
+            chmod +x /usr/local/bin/app-sync
+            systemctl restart app-sync
+            sleep 2
+            systemctl status app-sync --no-pager
 
       - name: Deploy to server
         uses: appleboy/scp-action@v0.1.7
