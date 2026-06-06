@@ -14,8 +14,8 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          repository: mobiletoly/go-oversync
-          ref: v0.2.0
+          repository: s-charvin/go-oversync
+          ref: 951ef46
           path: third_party/go-oversync
 
       - uses: actions/setup-go@v5
