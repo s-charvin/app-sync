@@ -83,7 +83,7 @@ func SystemData(ctx context.Context, pool *pgxpool.Pool, userID string, logger *
 	if err := tx.QueryRow(ctx, `UPDATE sync.user_state SET next_bundle_seq = next_bundle_seq + 1 WHERE user_pk = $1 RETURNING next_bundle_seq - 1`, userPK).Scan(&bundleSeq); err != nil {
 		return fmt.Errorf("alloc bundle_seq: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO sync.bundle_log (user_pk, bundle_seq, source_id, source_bundle_id, row_count, byte_count, bundle_hash, committed_at) VALUES ($1, $2, 'system-seed', 1, 0, 0, ''::bytea, now())`, userPK, bundleSeq); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO sync.bundle_log (user_pk, bundle_seq, source_id, source_bundle_id, row_count, byte_count, bundle_hash, committed_at) VALUES ($1, $2, 'system-seed', 1, 0, 0, ''::bytea, now()) ON CONFLICT ON CONSTRAINT bundle_log_source_tuple_key DO NOTHING`, userPK, bundleSeq); err != nil {
 		return fmt.Errorf("bundle_log init: %w", err)
 	}
 
