@@ -10,7 +10,6 @@ require (
 	github.com/stretchr/testify v1.11.1
 )
 
-
 require (
 	github.com/bytedance/sonic v1.14.0 // indirect
 	github.com/bytedance/sonic/loader v0.3.0 // indirect

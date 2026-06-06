@@ -26,9 +26,6 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*http.Se
 		AppName:                  cfg.AppName,
 		MaxSupportedSchemaVersion: 1,
 		RegisteredTables:         table.RegisteredTables(),
-		AutoSeedInitialBundle:    true,
-		SeedSystemData:           seed.SystemData,
-		MaxRowsPerInitialSeed:    100000,
 	}
 
 	svc, err := oversync.NewRuntimeService(pool, svcCfg, logger)
@@ -65,6 +62,21 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*http.Se
 
 	auth := r.Group("")
 	auth.Use(jwtAuthMiddleware([]byte(cfg.JWTSecret), cfg.SupabaseURL))
+
+	auth.POST("/syncx/seed", func(c *gin.Context) {
+		userID, _ := c.Request.Context().Value(userIDCtxKey).(string)
+		if userID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "missing user_id"})
+			return
+		}
+		if err := seed.SystemData(c.Request.Context(), pool, userID, logger); err != nil {
+			logger.Error("seed system data failed", "error", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "seeded"})
+	})
+
 	auth.Any("/sync/*path", gin.WrapH(protectedHandler))
 
 	srv := &http.Server{
